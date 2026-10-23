@@ -18,6 +18,6 @@ export async function chatRoutes(app: FastifyInstance) {
       });
     }
 
-    return handleMessage(phone, message);
+    return await handleMessage(phone, message);
   });
 }
