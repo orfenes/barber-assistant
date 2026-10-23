@@ -1,22 +1,28 @@
-
 import { availableTimes, services, type ServiceId } from "../data/services";
+import { db } from "../data/database";
 
 export type Step =
-  | "menu"
-  | "services"
-  | "date"
-  | "time"
-  | "confirmation"
-  | "human";
+  "menu" | "services" | "date" | "time" | "confirmation" | "human";
 
 export type Conversation = {
   step: Step;
-  service?: (typeof services)[ServiceId];
-  date?: string;
-  time?: string;
+  service?: (typeof services)[ServiceId] | undefined;
+  date?: string | undefined;
+  time?: string | undefined;
 };
 
 export type Appointment = {
+  id?: number;
+  phone: string;
+  service: string;
+  price: number;
+  date: string;
+  time: string;
+  status: "confirmed";
+};
+
+type AppointmentRow = {
+  id: number;
   phone: string;
   service: string;
   price: number;
@@ -26,7 +32,23 @@ export type Appointment = {
 };
 
 const conversations = new Map<string, Conversation>();
-const appointments: Appointment[] = [];
+
+const findAppointmentsByDate = db.prepare(`
+  SELECT time
+  FROM appointments
+  WHERE date = ? AND status = 'confirmed'
+`);
+
+const insertAppointment = db.prepare(`
+  INSERT INTO appointments (phone, service, price, date, time, status)
+  VALUES (@phone, @service, @price, @date, @time, @status)
+`);
+
+const listAppointments = db.prepare(`
+  SELECT id, phone, service, price, date, time, status
+  FROM appointments
+  ORDER BY date, time
+`);
 
 function getConversation(phone: string): Conversation {
   let conversation = conversations.get(phone);
@@ -40,11 +62,9 @@ function getConversation(phone: string): Conversation {
 }
 
 function isValidDate(date: string): boolean {
-  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(date)) {
-    return false;
-  }
+  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(date)) return false;
 
-  const [day, month, year] = date.split("/").map(Number);
+  const [day = 0, month = 0, year = 0] = date.split("/").map(Number);
   const parsedDate = new Date(year, month - 1, day);
 
   return (
@@ -55,7 +75,7 @@ function isValidDate(date: string): boolean {
 }
 
 function isPastDate(date: string): boolean {
-  const [day, month, year] = date.split("/").map(Number);
+  const [day = 0, month = 0, year = 0] = date.split("/").map(Number);
   const selectedDate = new Date(year, month - 1, day);
   const today = new Date();
 
@@ -65,23 +85,16 @@ function isPastDate(date: string): boolean {
   return selectedDate < today;
 }
 
-function getAvailableTimes(date: string) {
-  const bookedTimes = new Set(
-    appointments
-      .filter(
-        (appointment) =>
-          appointment.date === date &&
-          appointment.status === "confirmed",
-      )
-      .map((appointment) => appointment.time),
-  );
+function getAvailableTimes(date: string): [string, string][] {
+  const rows = findAppointmentsByDate.all(date) as { time: string }[];
+  const bookedTimes = new Set(rows.map((appointment) => appointment.time));
 
   return Object.entries(availableTimes).filter(
     ([, time]) => !bookedTimes.has(time),
-  );
+  ) as [string, string][];
 }
 
-function formatTimes(times: [string, string][]) {
+function formatTimes(times: [string, string][]): string {
   return times.map(([id, time]) => `${id} - ${time}`).join("\n");
 }
 
@@ -120,22 +133,17 @@ function handleMenu(message: string, conversation: Conversation) {
         "Qual serviço deseja?\n\n" +
         Object.entries(services)
           .map(
-            ([id, service]) =>
-              `${id} - ${service.name} (R$ ${service.price})`,
+            ([id, service]) => `${id} - ${service.name} (R$ ${service.price})`,
           )
           .join("\n"),
     };
   }
 
-  if (message === "2") {
-    return showServices();
-  }
+  if (message === "2") return showServices();
 
   if (message === "3") {
     conversation.step = "human";
-    return {
-      reply: "Um atendente poderá continuar seu atendimento.",
-    };
+    return { reply: "Um atendente poderá continuar seu atendimento." };
   }
 
   return { reply: "Opção inválida. Digite 1, 2 ou 3." };
@@ -164,9 +172,7 @@ function handleDate(message: string, conversation: Conversation) {
   }
 
   if (isPastDate(message)) {
-    return {
-      reply: "Essa data já passou. Informe uma data futura.",
-    };
+    return { reply: "Essa data já passou. Informe uma data futura." };
   }
 
   const times = getAvailableTimes(message);
@@ -174,8 +180,7 @@ function handleDate(message: string, conversation: Conversation) {
   if (times.length === 0) {
     return {
       reply:
-        "Não temos horários disponíveis para essa data.\n\n" +
-        "Informe outra data no formato DD/MM/AAAA.",
+        "Não temos horários disponíveis para essa data.\n\nInforme outra data no formato DD/MM/AAAA.",
     };
   }
 
@@ -184,10 +189,7 @@ function handleDate(message: string, conversation: Conversation) {
   conversation.step = "time";
 
   return {
-    reply:
-      `Data selecionada: ${message}\n\n` +
-      "Horários disponíveis:\n\n" +
-      formatTimes(times as [string, string][]),
+    reply: `Data selecionada: ${message}\n\nHorários disponíveis:\n\n${formatTimes(times)}`,
   };
 }
 
@@ -204,8 +206,9 @@ function handleTime(message: string, conversation: Conversation) {
     return {
       reply:
         "Esse horário não está disponível.\n\n" +
-        "Escolha uma das opções:\n\n" +
-        formatTimes(times as [string, string][]),
+        (times.length
+          ? `Escolha uma das opções:\n\n${formatTimes(times)}`
+          : "Não restam horários nessa data. Informe outra data no formato DD/MM/AAAA."),
     };
   }
 
@@ -217,9 +220,7 @@ function handleTime(message: string, conversation: Conversation) {
       `Serviço: ${conversation.service?.name}\n` +
       `Data: ${conversation.date}\n` +
       `Horário: ${conversation.time}\n\n` +
-      "Deseja confirmar o agendamento?\n\n" +
-      "1 - Sim\n" +
-      "2 - Não",
+      "Deseja confirmar o agendamento?\n\n1 - Sim\n2 - Não",
   };
 }
 
@@ -230,10 +231,7 @@ function handleConfirmation(
 ) {
   if (message === "2") {
     conversations.delete(phone);
-
-    return {
-      reply: "Agendamento cancelado. Digite 'oi' para voltar ao menu.",
-    };
+    return { reply: "Agendamento cancelado. Digite 'oi' para voltar ao menu." };
   }
 
   if (message !== "1") {
@@ -244,33 +242,8 @@ function handleConfirmation(
 
   if (!conversation.service || !conversation.date || !conversation.time) {
     conversations.delete(phone);
-
     return {
       reply: "Não foi possível recuperar os dados. Digite 'oi' para recomeçar.",
-    };
-  }
-
-  // Confere novamente para evitar reservar um horário ocupado durante a conversa.
-  const alreadyBooked = appointments.some(
-    (appointment) =>
-      appointment.date === conversation.date &&
-      appointment.time === conversation.time &&
-      appointment.status === "confirmed",
-  );
-
-  if (alreadyBooked) {
-    conversation.step = "time";
-    conversation.time = undefined;
-
-    const times = getAvailableTimes(conversation.date);
-
-    return {
-      reply:
-        "Esse horário acabou de ser reservado por outra pessoa.\n\n" +
-        (times.length > 0
-          ? "Escolha outro horário:\n\n" +
-            formatTimes(times as [string, string][])
-          : "Não restam horários nessa data. Informe outra data no formato DD/MM/AAAA."),
     };
   }
 
@@ -283,7 +256,30 @@ function handleConfirmation(
     status: "confirmed",
   };
 
-  appointments.push(appointment);
+  try {
+    insertAppointment.run(appointment);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes("UNIQUE constraint failed")
+    ) {
+      conversation.step = "time";
+      conversation.time = undefined;
+
+      const times = getAvailableTimes(conversation.date);
+
+      return {
+        reply:
+          "Esse horário acabou de ser reservado por outra pessoa.\n\n" +
+          (times.length
+            ? `Escolha outro horário:\n\n${formatTimes(times)}`
+            : "Não restam horários nessa data. Informe outra data no formato DD/MM/AAAA."),
+      };
+    }
+
+    throw error;
+  }
+
   conversations.delete(phone);
 
   return {
@@ -307,22 +303,22 @@ export function handleMessage(phone: string, message: string) {
   switch (conversation.step) {
     case "menu":
       return handleMenu(message, conversation);
-
     case "services":
       return handleService(message, conversation);
-
     case "date":
       return handleDate(message, conversation);
-
     case "time":
       return handleTime(message, conversation);
-
     case "confirmation":
       return handleConfirmation(message, phone, conversation);
-
     case "human":
       return {
-        reply: "Seu atendimento aguarda um atendente. Digite 'oi' para voltar ao menu.",
+        reply:
+          "Seu atendimento aguarda um atendente. Digite 'oi' para voltar ao menu.",
       };
   }
+}
+
+export function getAppointments(): AppointmentRow[] {
+  return listAppointments.all() as AppointmentRow[];
 }

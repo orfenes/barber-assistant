@@ -8,3 +8,5 @@ barber-assistant.db
 barber-assistant.db-shm
 barber-assistant.db-wal
 EOF
+credentials.json
+token.json

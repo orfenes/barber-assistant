@@ -11,10 +11,15 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "fastify": "^5.12.7"
+    "@google-cloud/local-auth": "^2.1.0",
+    "better-sqlite3": "^13.0.3",
+    "fastify": "^5.12.7",
+    "googleapis": "^105.0.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.6.5",
+    "prettier": "^3.9.10",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }
